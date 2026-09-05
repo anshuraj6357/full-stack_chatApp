@@ -1,0 +1,102 @@
+stages:
+  - test
+  - build
+  - deploy
+
+
+# =========================
+# TEST JOB
+# =========================
+test-job:
+  stage: test
+  image: node:18
+
+  script:
+    - echo "Starting TEST stage..."
+    - cd backend
+    - echo "Installing dependencies..."
+    - npm ci
+    - echo "TEST STAGE COMPLETED."
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+
+
+# =========================
+# BUILD JOB
+# =========================
+build-job:
+  stage: build
+  image: docker:latest
+
+  services:
+    - docker:dind
+
+  before_script:
+    - echo "Logging into Docker Hub..."
+    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+  script:
+    - echo "Starting BUILD stage..."
+
+    - echo "Building Docker image..."
+    - docker build -t $DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA ./backend
+
+    - echo "Tagging image as latest..."
+    - docker tag $DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA $DOCKER_USERNAME/chat-app-backend:latest
+
+    - echo "Pushing versioned image..."
+    - docker push $DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA
+
+    - echo "Pushing latest image..."
+    - docker push $DOCKER_USERNAME/chat-app-backend:latest
+
+    - echo "BUILD STAGE COMPLETED."
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+
+
+# =========================
+# DEPLOY JOB
+# =========================
+deploy-job:
+  stage: deploy
+  image: alpine:latest
+
+  before_script:
+    - echo "Installing SSH..."
+    - apk add --no-cache openssh-client
+
+    - echo "Creating SSH folder..."
+    - mkdir -p ~/.ssh
+
+    - echo "Adding private key..."
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    - echo "Adding EC2 host..."
+    - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+  script:
+    - echo "Starting K3s deployment..."
+
+    - echo "Updating Kubernetes image..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl set image deployment/chat-app-backend backend=$DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA -n chat-app"
+
+    - echo "Waiting for rollout..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl rollout status deployment/chat-app-backend -n chat-app --timeout=120s"
+
+    - echo "Checking pods..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get pods -n chat-app"
+
+    - echo "Checking deployment..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get deployment -n chat-app"
+
+    - echo "Checking services..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get svc -n chat-app"
+
+    - echo "DEPLOYMENT COMPLETED."
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
