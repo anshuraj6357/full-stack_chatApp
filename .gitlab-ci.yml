@@ -68,7 +68,9 @@ deploy-job:
     - echo "Installing SSH..."
     - apk add --no-cache openssh-client
 
+    - echo "Creating SSH directory..."
     - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
 
     - echo "Adding private key..."
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
@@ -76,54 +78,107 @@ deploy-job:
 
     - echo "Adding EC2 host..."
     - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+    - chmod 600 ~/.ssh/known_hosts
 
   script:
     - echo "Starting K3s deployment..."
 
-    # Create k8s folder on EC2
+    # ==========================================
+    # CREATE K8S DIRECTORY ON EC2
+    # ==========================================
     - ssh "$EC2_USER@$EC2_HOST" "mkdir -p ~/k8s"
 
-    # Copy all Kubernetes yaml files
+    # ==========================================
+    # COPY ALL KUBERNETES YAML FILES TO EC2
+    # ==========================================
+    - echo "Copying Kubernetes YAML files..."
     - scp k8s/*.yml "$EC2_USER@$EC2_HOST:~/k8s/"
 
-    # Namespace
+    # ==========================================
+    # NAMESPACE
+    # ==========================================
+    - echo "Applying namespace..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/namespace.yml"
 
-    # Secrets
+    # ==========================================
+    # SECRETS
+    # ==========================================
+    - echo "Applying secrets..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/secrets.yml"
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-secrets.yml"
 
-    # MongoDB Storage
+    # ==========================================
+    # MONGODB STORAGE
+    # ==========================================
+    - echo "Applying MongoDB storage..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-pv.yml"
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-pvc.yml"
 
-    # MongoDB
+    # ==========================================
+    # MONGODB
+    # ==========================================
+    - echo "Deploying MongoDB..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-deployment.yml"
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-service.yml"
 
-    # Backend
+    # ==========================================
+    # BACKEND
+    # ==========================================
+    - echo "Applying backend deployment..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/backend-deployment.yml"
+
+    - echo "Applying backend service..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/backend-service.yml"
 
-    # Frontend
+    # ==========================================
+    # UPDATE BACKEND IMAGE
+    # ==========================================
+    - echo "Updating backend image..."
+
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl set image deployment/backend-deployment backend=$DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA -n chat-app"
+
+    # ==========================================
+    # WAIT FOR BACKEND
+    # ==========================================
+    - echo "Waiting for backend rollout..."
+
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl rollout status deployment/backend-deployment -n chat-app --timeout=180s"
+
+    # ==========================================
+    # FRONTEND
+    # ==========================================
+    - echo "Applying frontend deployment..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/frontend-deployment.yml"
+
+    - echo "Applying frontend service..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/frontend-service.yml"
 
-    # Ingress
+    # ==========================================
+    # INGRESS
+    # ==========================================
+    - echo "Applying ingress..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/ingress.yml"
 
-    # Update backend image to current CI commit
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl set image deployment/chat-app-backend backend=$DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA -n chat-app"
+    # ==========================================
+    # CHECK RESOURCES
+    # ==========================================
+    - echo "Checking deployments..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get deployments -n chat-app"
 
-    # Wait for backend rollout
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl rollout status deployment/chat-app-backend -n chat-app --timeout=180s"
+    - echo "Checking pods..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get pods -n chat-app -o wide"
 
-    # Check all resources
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get all -n chat-app"
+    - echo "Checking services..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get svc -n chat-app"
 
+    - echo "Checking ingress..."
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get ingress -n chat-app"
 
-    - echo "K3s deployment completed."
+    - echo "Checking current backend image..."
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get deployment backend-deployment -n chat-app -o jsonpath='{.spec.template.spec.containers[*].image}'"
+
+    - echo ""
+    - echo "K3s deployment completed successfully."
 
   rules:
     - if: '$CI_COMMIT_BRANCH == "master"'
