@@ -68,7 +68,6 @@ deploy-job:
     - echo "Installing SSH..."
     - apk add --no-cache openssh-client
 
-    - echo "Creating SSH folder..."
     - mkdir -p ~/.ssh
 
     - echo "Adding private key..."
@@ -81,22 +80,50 @@ deploy-job:
   script:
     - echo "Starting K3s deployment..."
 
-    - echo "Updating Kubernetes image..."
+    # Create k8s folder on EC2
+    - ssh "$EC2_USER@$EC2_HOST" "mkdir -p ~/k8s"
+
+    # Copy all Kubernetes yaml files
+    - scp k8s/*.yml "$EC2_USER@$EC2_HOST:~/k8s/"
+
+    # Namespace
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/namespace.yml"
+
+    # Secrets
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/secrets.yml"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-secrets.yml"
+
+    # MongoDB Storage
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-pv.yml"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-pvc.yml"
+
+    # MongoDB
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-deployment.yml"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/mongodb-service.yml"
+
+    # Backend
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/backend-deployment.yml"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/backend-service.yml"
+
+    # Frontend
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/frontend-deployment.yml"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/frontend-service.yml"
+
+    # Ingress
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl apply -f ~/k8s/ingress.yml"
+
+    # Update backend image to current CI commit
     - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl set image deployment/chat-app-backend backend=$DOCKER_USERNAME/chat-app-backend:$CI_COMMIT_SHORT_SHA -n chat-app"
 
-    - echo "Waiting for rollout..."
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl rollout status deployment/chat-app-backend -n chat-app --timeout=120s"
+    # Wait for backend rollout
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl rollout status deployment/chat-app-backend -n chat-app --timeout=180s"
 
-    - echo "Checking pods..."
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get pods -n chat-app"
+    # Check all resources
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get all -n chat-app"
 
-    - echo "Checking deployment..."
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get deployment -n chat-app"
+    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get ingress -n chat-app"
 
-    - echo "Checking services..."
-    - ssh "$EC2_USER@$EC2_HOST" "sudo k3s kubectl get svc -n chat-app"
-
-    - echo "DEPLOYMENT COMPLETED."
+    - echo "K3s deployment completed."
 
   rules:
     - if: '$CI_COMMIT_BRANCH == "master"'
