@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: monitoring-deployment
+  namespace: monitoring
+  labels:
+    app: deployment-monitoring
+
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: pod-monitoring
+
+  template:
+    metadata:
+      labels:
+        app: pod-monitoring
+
+    spec:
+      containers:
+        - name: monitoring-container-pod-prometheus
+          image: prom/prometheus
+          ports:
+            - containerPort: 9090
